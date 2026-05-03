@@ -1,3 +1,40 @@
+"""
+End-of-semester grading helper for Econ 101.
+
+Workflow:
+    1. Place the two source CSVs in `data/` (see EXPECTED INPUTS below).
+    2. Run this script top-to-bottom in VSCode (cells delimited by `#%%`).
+       First pass writes `data/processed/participation_input.csv` (template)
+       and reports any unmatched names.
+    3. Copy the template to `participation_input_filled.csv` and hand-enter
+       a `participation_score` (0–3) for each student in your sections.
+    4. Optional: edit `data/section_curve_overrides.csv` to set per-section
+       min/max grade caps. Empty rows fall back to script defaults.
+    5. Re-run the script. Final outputs land in `output/`.
+
+EXPECTED INPUTS (file names are configurable in the macros below):
+    SECTION_FILE       : section roster with columns
+                         `Name`, `Section`, `Problem sets`, `Scores 1-10`,
+                         `Absent more than 2 times?`. Names are
+                         `"Lastname,Firstname"` with NO space.
+    CENGAGE_FILE       : Cengage export. First data row contains
+                         `Max Points: ...` metadata and is skipped.
+                         Required columns: `Student Name` (formatted
+                         `"Lastname, Firstname"`), `Problem Set #1`–`#8`
+                         (max 50 each), `Section Two`–`Section Twelve`
+                         (11 attendance/participation columns, 0–3 per
+                         session, 0 or empty = absent).
+    SECTION_OVERRIDES  : optional per-section min/max overrides with
+                         columns `section, min_grade, max_grade`.
+
+OUTPUTS (gitignored):
+    data/processed/participation_input.csv         template (regenerated each run)
+    data/processed/participation_input_filled.csv  YOU fill participation_score
+    output/section_scores.csv                      pset + absence flag (early dump)
+    output/section_scores_final.csv                long: all columns + totals
+    output/section_scores_short.csv                short: 5-column gradebook view
+"""
+
 #%% Imports & paths
 from __future__ import annotations
 from pathlib import Path
@@ -12,6 +49,7 @@ OUT = ROOT / "output"
 PROCESSED.mkdir(exist_ok=True)
 OUT.mkdir(exist_ok=True)
 
+# --- File paths (rename here if your filenames differ) ----------------------
 SECTION_FILE = DATA / "101_S26_pset+discussion.csv"
 CENGAGE_FILE = DATA / "cengage_grades_101.csv"
 SECTION_OVERRIDES = DATA / "section_curve_overrides.csv"
@@ -88,9 +126,22 @@ section_df[["_norm", "_last", "_first"]].head()
 cengage_df[["_norm", "_last", "_first"]].head()
 
 #%% Match section roster ↔ cengage
+SUFFIXES = {"iv", "iii", "ii", "jr", "sr"}
+
+def _last_tokens(last: str) -> set[str]:
+    return {t for t in last.split() if t and t not in SUFFIXES}
+
 def best_match(last: str, first: str, candidates: pd.DataFrame) -> str | None:
-    """Match on last name; if multiple, pick best fuzzy first-name match."""
+    """Match on last name; if no exact match, fall back to token-overlap
+    (handles compound surnames 'X Y' and suffixes like 'iv'/'jr').
+    If multiple candidates remain, pick best fuzzy first-name match."""
     pool = candidates[candidates["_last"] == last]
+    if pool.empty:
+        section_tokens = _last_tokens(last)
+        if section_tokens:
+            pool = candidates[candidates["_last"].apply(
+                lambda c: bool(section_tokens & _last_tokens(c))
+            )]
     if pool.empty:
         return None
     if len(pool) == 1:
